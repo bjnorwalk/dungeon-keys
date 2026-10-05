@@ -5,17 +5,6 @@ cmake-build*/
 .env
 .env.*
 !.env.example
-.agents/
-.codex/
-.claude/
-.cursor/
-.impeccable/
-impeccable/
-AGENTS.md
-AGENTS.override.md
-CLAUDE.md
-GEMINI.md
-SKILL.md
 *.db
 *.sqlite
 *.sqlite3
