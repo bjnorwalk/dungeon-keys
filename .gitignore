@@ -1,5 +1,6 @@
 # Build output and local CMake settings
 build/
+build-web/
 cmake-build*/
 CMakeUserPresets.json
 

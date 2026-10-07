@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A typing roguelike in C. Explore the dungeon and type enemy words to survive.">
+  <title>Dungeon Keys</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #080a12; color: #e9e6df; }
+    body { margin: 0; padding: 24px; }
+    main { max-width: 768px; margin: auto; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+    h1 { font-size: 20px; font-weight: 500; margin: 0; }
+    a { color: #b7b2a5; }
+    #status, p { color: #b7b2a5; font-size: 14px; line-height: 1.6; }
+    canvas { display: block; width: 100%; height: auto; background: #080a12; }
+    canvas:focus-visible { outline: 2px solid #c5a567; outline-offset: 4px; }
+    @media (max-width: 600px) { body { padding: 16px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header><h1>Dungeon Keys</h1><a href="https://github.com/bjnorwalk/dungeon_keys">Source</a></header>
+    <p id="status" role="status">Loading game…</p>
+    <canvas id="canvas" tabindex="0" aria-label="Dungeon Keys game. Enter starts a run; arrow keys move; type enemy words to attack." oncontextmenu="event.preventDefault()"></canvas>
+    <p>Click the game, then press Enter to start. Arrow keys move; typing attacks. Desktop keyboard recommended. Upgrades and high scores stay in this browser when storage is available.</p>
+  </main>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const status = document.getElementById('status');
+    canvas.addEventListener('click', () => canvas.focus());
+    canvas.addEventListener('keydown', event => {
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(event.key)) event.preventDefault();
+    });
+    var Module = {
+      canvas,
+      setStatus(message) { status.textContent = message; },
+      onRuntimeInitialized() { status.textContent = 'Ready. Click the game to focus.'; },
+      onAbort() { status.textContent = 'The game could not start. Try a current browser with WebGL enabled.'; },
+      printErr(message) { console.error(message); }
+    };
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

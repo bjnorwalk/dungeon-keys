@@ -1,4 +1,7 @@
 #include "raylib.h"
+#ifdef PLATFORM_WEB
+#include <emscripten/emscripten.h>
+#endif
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -365,6 +368,13 @@ static void SaveSaveData(void) {
     fprintf(file, "%d %d %d %.3f %.3f %d\n", highScore, playerGold, upgradeMaxHealth,
             upgradeMoveSpeed, upgradeEnemySlow, upgradeComboBonus);
     fclose(file);
+#ifdef PLATFORM_WEB
+    EM_ASM({
+        try {
+            localStorage.setItem('dungeonKeys.save', FS.readFile('save.dat', { encoding: 'utf8' }));
+        } catch (_) { /* The run remains playable without persistent storage. */ }
+    });
+#endif
 }
 
 // Reset the entire game.  Called when starting or restarting.  It does
@@ -1267,7 +1277,233 @@ static void UnloadSoundEffects(void) {
     UnloadSound(sfxFreeze);
 }
 
-// Main program
+static void UpdateDrawFrame(void) {
+    float dt = GetFrameTime();
+    // Update based on game state
+    switch (gameState) {
+        case STATE_MENU:
+            // Start the game with Enter/Space/N
+            if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_N)) {
+                ResetGame();
+                gameState = STATE_PLAY;
+            }
+            // Cycle difficulty with D.  Difficulty persists until changed.
+            if (IsKeyPressed(KEY_D)) {
+                difficulty++;
+                if (difficulty > 3) difficulty = 1;
+                // Show a message indicating the new difficulty
+                char buf[32];
+                snprintf(buf, sizeof(buf), "Difficulty: %s", difficultyNames[difficulty]);
+                AddFloatingText(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 + 40, buf, GOLD);
+            }
+            break;
+        case STATE_PLAY:
+            if (!gameOver) {
+                // Player movement
+                if ((IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) && IsFloor(player.x - 1, player.y)) player.x--;
+                if ((IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D)) && IsFloor(player.x + 1, player.y)) player.x++;
+                if ((IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) && IsFloor(player.x, player.y - 1)) player.y--;
+                if ((IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) && IsFloor(player.x, player.y + 1)) player.y++;
+                // Mark visited cells for fog of war: mark the player's tile and its
+                // immediate neighbours as visited whenever the player moves.
+                if (player.y >= 0 && player.y < MAP_HEIGHT && player.x >= 0 && player.x < MAP_WIDTH) {
+                    visited[player.y][player.x] = true;
+                    for (int dy = -1; dy <= 1; dy++) {
+                        for (int dx = -1; dx <= 1; dx++) {
+                            int nx = player.x + dx;
+                            int ny = player.y + dy;
+                            if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH) {
+                                visited[ny][nx] = true;
+                            }
+                        }
+                    }
+                }
+                // Handle typing
+                int key = GetCharPressed();
+                while (key > 0) {
+                    if (((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) && strlen(typedInput) < sizeof(typedInput) - 1) {
+                        char c = (char)key;
+                        if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+                        size_t len = strlen(typedInput);
+                        typedInput[len] = c;
+                        typedInput[len + 1] = '\0';
+                        // Check enemy matches
+                        int target = -1;
+                        for (int i = 0; i < MAX_ENEMIES; i++) {
+                            if (!enemies[i].active) continue;
+                            if (strncmp(enemies[i].word, typedInput, strlen(typedInput)) == 0) {
+                                target = i;
+                                break;
+                            }
+                        }
+                        if (target == -1) {
+                            // Check items
+                            bool matchedItem = false;
+                            for (int j = 0; j < MAX_ITEMS; j++) {
+                                if (!items[j].active) continue;
+                                if (strncmp(items[j].word, typedInput, strlen(typedInput)) == 0) {
+                                    matchedItem = true;
+                                    break;
+                                }
+                            }
+                            // Check trap disarm
+                            bool trapMatch = false;
+                            for (int t = 0; t < MAX_TRAPS; t++) {
+                                if (traps[t].active && traps[t].triggered) {
+                                    const char *tw = "disarm";
+                                    if (strncmp(tw, typedInput, strlen(typedInput)) == 0) {
+                                        trapMatch = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!matchedItem && !trapMatch) {
+                                // Miss
+                                player.combo = 0;
+                                typedInput[0] = '\0';
+                                AddFloatingText(player.x * TILE_SIZE, player.y * TILE_SIZE - 20, "MISS", RED);
+                                shakeTimer = 0.12f;
+                                shakeStrength = 4.0f;
+                                PlaySound(sfxMiss);
+                            }
+                        } else {
+                            // If full word typed
+                            if (strcmp(enemies[target].word, typedInput) == 0) {
+                                RemoveEnemy(target);
+                                typedInput[0] = '\0';
+                            }
+                        }
+                    }
+                    key = GetCharPressed();
+                }
+                // Handle backspace/enter
+                if (IsKeyPressed(KEY_BACKSPACE)) {
+                    size_t l = strlen(typedInput);
+                    if (l > 0) typedInput[l - 1] = '\0';
+                }
+                if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)) {
+                    typedInput[0] = '\0';
+                }
+                // Update traps disarming
+                HandleTrapTyping();
+                // Update timers
+                // Calculate spawn rate factoring in upgrades and selected difficulty.  On
+                // easy difficulty the spawn rate is longer (enemies spawn less often),
+                // on hard difficulty it is shorter (more frequent spawns).  Upgrades
+                // to player speed reduce the spawn rate further.
+                float diffSpawnMult = (difficulty == 1 ? 1.3f : (difficulty == 3 ? 0.8f : 1.0f));
+                float spawnRate = BASE_SPAWN_RATE * upgradeMoveSpeed * diffSpawnMult;
+                spawnTimer += dt;
+                if (!inBossFight && spawnTimer >= spawnRate) {
+                    SpawnEnemy();
+                    spawnTimer = 0.0f;
+                }
+                itemSpawnTimer += dt;
+                if (itemSpawnTimer >= ITEM_SPAWN_INTERVAL) {
+                    SpawnItem();
+                    itemSpawnTimer = 0.0f;
+                }
+                // Freeze timer
+                if (freezeTimer > 0.0f) {
+                    freezeTimer -= dt;
+                    if (freezeTimer < 0.0f) freezeTimer = 0.0f;
+                }
+                // Update enemies
+                for (int i = 0; i < MAX_ENEMIES; i++) {
+                    if (!enemies[i].active) continue;
+                    // Move enemy if not frozen and if not boss
+                    enemies[i].moveTimer += dt;
+                    float delay = enemies[i].moveDelay;
+                    if (freezeTimer > 0.0f) delay *= 2.0f;
+                    if (enemies[i].moveTimer >= delay) {
+                        enemies[i].moveTimer = 0.0f;
+                        int dx = player.x - enemies[i].x;
+                        int dy = player.y - enemies[i].y;
+                        int stepX = 0;
+                        int stepY = 0;
+                        if (abs(dx) > abs(dy)) stepX = dx > 0 ? 1 : -1;
+                        else stepY = dy > 0 ? 1 : -1;
+                        int nx = enemies[i].x + stepX;
+                        int ny = enemies[i].y + stepY;
+                        if (IsFloor(nx, ny)) {
+                            enemies[i].x = nx;
+                            enemies[i].y = ny;
+                        }
+                    }
+                    // Collision
+                    if (enemies[i].x == player.x && enemies[i].y == player.y) {
+                        player.health--;
+                        player.combo = 0;
+                        AddFloatingText(player.x * TILE_SIZE, player.y * TILE_SIZE - 20, "-HP", RED);
+                        SpawnParticles(player.x * TILE_SIZE + TILE_SIZE / 2.0f, player.y * TILE_SIZE + TILE_SIZE / 2.0f, RED);
+                        PlaySound(sfxDamage);
+                        enemies[i].active = false;
+                        activeEnemies--;
+                        if (player.health <= 0) {
+                            gameOver = true;
+                            typedInput[0] = '\0';
+                        }
+                    }
+                }
+                // Update boss
+                UpdateBoss(dt);
+                // Update items and traps
+                UpdateItems(dt);
+                UpdateTraps(dt);
+            } else {
+                // If game over, handle restarts
+                if (IsKeyPressed(KEY_R)) {
+                    ResetGame();
+                    gameState = STATE_PLAY;
+                    newHighAchieved = false;
+                    highUpdated = false;
+                }
+                if (IsKeyPressed(KEY_M)) {
+                    ResetGame();
+                    gameState = STATE_MENU;
+                    newHighAchieved = false;
+                    highUpdated = false;
+                }
+            }
+            break;
+        case STATE_SHOP:
+            HandleShopInput();
+            break;
+        case STATE_GAME_OVER:
+            if (IsKeyPressed(KEY_R)) {
+                ResetGame();
+                gameState = STATE_PLAY;
+                newHighAchieved = false;
+                highUpdated = false;
+            }
+            if (IsKeyPressed(KEY_M) || IsKeyPressed(KEY_ESCAPE)) {
+                ResetGame();
+                gameState = STATE_MENU;
+                newHighAchieved = false;
+                highUpdated = false;
+            }
+            break;
+    }
+    // Update particles and texts globally
+    UpdateParticles(dt);
+    UpdateFloatingTexts(dt);
+    // Shake timer decays
+    if (shakeTimer > 0.0f) {
+        shakeTimer -= dt;
+        if (shakeTimer < 0.0f) shakeTimer = 0.0f;
+    }
+    // Drawing
+    BeginDrawing();
+    ClearBackground((Color){8, 10, 18, 255});
+    if (gameState == STATE_MENU) {
+        DrawMenuScreen();
+    } else {
+        DrawGameWorld();
+        DrawHUD();
+    }
+    EndDrawing();
+}
+
 int main(void) {
     srand((unsigned int)time(NULL));
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Dungeon Keys – Rogue Edition");
@@ -1277,236 +1513,24 @@ int main(void) {
     // Initialise data
     InitWordBank();
     LoadExternalWords();
+#ifdef PLATFORM_WEB
+    // Browser storage keeps the existing save format without a server.
+    EM_ASM({
+        try {
+            const saved = localStorage.getItem('dungeonKeys.save');
+            if (saved) FS.writeFile('save.dat', saved);
+        } catch (_) { /* Storage may be unavailable in private browsing. */ }
+    });
+#endif
     LoadSaveData();
     InitSoundEffects();
     ResetGame();
     gameState = STATE_MENU;
-    while (!WindowShouldClose()) {
-        float dt = GetFrameTime();
-        // Update based on game state
-        switch (gameState) {
-            case STATE_MENU:
-                // Start the game with Enter/Space/N
-                if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_N)) {
-                    ResetGame();
-                    gameState = STATE_PLAY;
-                }
-                // Cycle difficulty with D.  Difficulty persists until changed.
-                if (IsKeyPressed(KEY_D)) {
-                    difficulty++;
-                    if (difficulty > 3) difficulty = 1;
-                    // Show a message indicating the new difficulty
-                    char buf[32];
-                    snprintf(buf, sizeof(buf), "Difficulty: %s", difficultyNames[difficulty]);
-                    AddFloatingText(SCREEN_WIDTH/2 - 80, SCREEN_HEIGHT/2 + 40, buf, GOLD);
-                }
-                break;
-            case STATE_PLAY:
-                if (!gameOver) {
-                    // Player movement
-                    if ((IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) && IsFloor(player.x - 1, player.y)) player.x--;
-                    if ((IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D)) && IsFloor(player.x + 1, player.y)) player.x++;
-                    if ((IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W)) && IsFloor(player.x, player.y - 1)) player.y--;
-                    if ((IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) && IsFloor(player.x, player.y + 1)) player.y++;
-                    // Mark visited cells for fog of war: mark the player's tile and its
-                    // immediate neighbours as visited whenever the player moves.
-                    if (player.y >= 0 && player.y < MAP_HEIGHT && player.x >= 0 && player.x < MAP_WIDTH) {
-                        visited[player.y][player.x] = true;
-                        for (int dy = -1; dy <= 1; dy++) {
-                            for (int dx = -1; dx <= 1; dx++) {
-                                int nx = player.x + dx;
-                                int ny = player.y + dy;
-                                if (ny >= 0 && ny < MAP_HEIGHT && nx >= 0 && nx < MAP_WIDTH) {
-                                    visited[ny][nx] = true;
-                                }
-                            }
-                        }
-                    }
-                    // Handle typing
-                    int key = GetCharPressed();
-                    while (key > 0) {
-                        if (((key >= 'a' && key <= 'z') || (key >= 'A' && key <= 'Z')) && strlen(typedInput) < sizeof(typedInput) - 1) {
-                            char c = (char)key;
-                            if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
-                            size_t len = strlen(typedInput);
-                            typedInput[len] = c;
-                            typedInput[len + 1] = '\0';
-                            // Check enemy matches
-                            int target = -1;
-                            for (int i = 0; i < MAX_ENEMIES; i++) {
-                                if (!enemies[i].active) continue;
-                                if (strncmp(enemies[i].word, typedInput, strlen(typedInput)) == 0) {
-                                    target = i;
-                                    break;
-                                }
-                            }
-                            if (target == -1) {
-                                // Check items
-                                bool matchedItem = false;
-                                for (int j = 0; j < MAX_ITEMS; j++) {
-                                    if (!items[j].active) continue;
-                                    if (strncmp(items[j].word, typedInput, strlen(typedInput)) == 0) {
-                                        matchedItem = true;
-                                        break;
-                                    }
-                                }
-                                // Check trap disarm
-                                bool trapMatch = false;
-                                for (int t = 0; t < MAX_TRAPS; t++) {
-                                    if (traps[t].active && traps[t].triggered) {
-                                        const char *tw = "disarm";
-                                        if (strncmp(tw, typedInput, strlen(typedInput)) == 0) {
-                                            trapMatch = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if (!matchedItem && !trapMatch) {
-                                    // Miss
-                                    player.combo = 0;
-                                    typedInput[0] = '\0';
-                                    AddFloatingText(player.x * TILE_SIZE, player.y * TILE_SIZE - 20, "MISS", RED);
-                                    shakeTimer = 0.12f;
-                                    shakeStrength = 4.0f;
-                                    PlaySound(sfxMiss);
-                                }
-                            } else {
-                                // If full word typed
-                                if (strcmp(enemies[target].word, typedInput) == 0) {
-                                    RemoveEnemy(target);
-                                    typedInput[0] = '\0';
-                                }
-                            }
-                        }
-                        key = GetCharPressed();
-                    }
-                    // Handle backspace/enter
-                    if (IsKeyPressed(KEY_BACKSPACE)) {
-                        size_t l = strlen(typedInput);
-                        if (l > 0) typedInput[l - 1] = '\0';
-                    }
-                    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)) {
-                        typedInput[0] = '\0';
-                    }
-                    // Update traps disarming
-                    HandleTrapTyping();
-                    // Update timers
-                    // Calculate spawn rate factoring in upgrades and selected difficulty.  On
-                    // easy difficulty the spawn rate is longer (enemies spawn less often),
-                    // on hard difficulty it is shorter (more frequent spawns).  Upgrades
-                    // to player speed reduce the spawn rate further.
-                    float diffSpawnMult = (difficulty == 1 ? 1.3f : (difficulty == 3 ? 0.8f : 1.0f));
-                    float spawnRate = BASE_SPAWN_RATE * upgradeMoveSpeed * diffSpawnMult;
-                    spawnTimer += dt;
-                    if (!inBossFight && spawnTimer >= spawnRate) {
-                        SpawnEnemy();
-                        spawnTimer = 0.0f;
-                    }
-                    itemSpawnTimer += dt;
-                    if (itemSpawnTimer >= ITEM_SPAWN_INTERVAL) {
-                        SpawnItem();
-                        itemSpawnTimer = 0.0f;
-                    }
-                    // Freeze timer
-                    if (freezeTimer > 0.0f) {
-                        freezeTimer -= dt;
-                        if (freezeTimer < 0.0f) freezeTimer = 0.0f;
-                    }
-                    // Update enemies
-                    for (int i = 0; i < MAX_ENEMIES; i++) {
-                        if (!enemies[i].active) continue;
-                        // Move enemy if not frozen and if not boss
-                        enemies[i].moveTimer += dt;
-                        float delay = enemies[i].moveDelay;
-                        if (freezeTimer > 0.0f) delay *= 2.0f;
-                        if (enemies[i].moveTimer >= delay) {
-                            enemies[i].moveTimer = 0.0f;
-                            int dx = player.x - enemies[i].x;
-                            int dy = player.y - enemies[i].y;
-                            int stepX = 0;
-                            int stepY = 0;
-                            if (abs(dx) > abs(dy)) stepX = dx > 0 ? 1 : -1;
-                            else stepY = dy > 0 ? 1 : -1;
-                            int nx = enemies[i].x + stepX;
-                            int ny = enemies[i].y + stepY;
-                            if (IsFloor(nx, ny)) {
-                                enemies[i].x = nx;
-                                enemies[i].y = ny;
-                            }
-                        }
-                        // Collision
-                        if (enemies[i].x == player.x && enemies[i].y == player.y) {
-                            player.health--;
-                            player.combo = 0;
-                            AddFloatingText(player.x * TILE_SIZE, player.y * TILE_SIZE - 20, "-HP", RED);
-                            SpawnParticles(player.x * TILE_SIZE + TILE_SIZE / 2.0f, player.y * TILE_SIZE + TILE_SIZE / 2.0f, RED);
-                            PlaySound(sfxDamage);
-                            enemies[i].active = false;
-                            activeEnemies--;
-                            if (player.health <= 0) {
-                                gameOver = true;
-                                typedInput[0] = '\0';
-                            }
-                        }
-                    }
-                    // Update boss
-                    UpdateBoss(dt);
-                    // Update items and traps
-                    UpdateItems(dt);
-                    UpdateTraps(dt);
-                } else {
-                    // If game over, handle restarts
-                    if (IsKeyPressed(KEY_R)) {
-                        ResetGame();
-                        gameState = STATE_PLAY;
-                        newHighAchieved = false;
-                        highUpdated = false;
-                    }
-                    if (IsKeyPressed(KEY_M)) {
-                        ResetGame();
-                        gameState = STATE_MENU;
-                        newHighAchieved = false;
-                        highUpdated = false;
-                    }
-                }
-                break;
-            case STATE_SHOP:
-                HandleShopInput();
-                break;
-            case STATE_GAME_OVER:
-                if (IsKeyPressed(KEY_R)) {
-                    ResetGame();
-                    gameState = STATE_PLAY;
-                    newHighAchieved = false;
-                    highUpdated = false;
-                }
-                if (IsKeyPressed(KEY_M) || IsKeyPressed(KEY_ESCAPE)) {
-                    ResetGame();
-                    gameState = STATE_MENU;
-                    newHighAchieved = false;
-                    highUpdated = false;
-                }
-                break;
-        }
-        // Update particles and texts globally
-        UpdateParticles(dt);
-        UpdateFloatingTexts(dt);
-        // Shake timer decays
-        if (shakeTimer > 0.0f) {
-            shakeTimer -= dt;
-            if (shakeTimer < 0.0f) shakeTimer = 0.0f;
-        }
-        // Drawing
-        BeginDrawing();
-        ClearBackground((Color){8, 10, 18, 255});
-        if (gameState == STATE_MENU) {
-            DrawMenuScreen();
-        } else {
-            DrawGameWorld();
-            DrawHUD();
-        }
-        EndDrawing();
-    }
+#ifdef PLATFORM_WEB
+    emscripten_set_main_loop(UpdateDrawFrame, 0, 1);
+#else
+    while (!WindowShouldClose()) UpdateDrawFrame();
+#endif
     // Save on exit
     SaveSaveData();
     UnloadSoundEffects();
