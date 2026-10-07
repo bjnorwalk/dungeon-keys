@@ -1,34 +1,44 @@
 # Dungeon Keys: Rogue Edition
 
-A typing roguelike by William Norwalk, written in C with raylib. Move through procedural dungeons and type enemy words to survive increasingly difficult waves.
+A typing roguelike written in C with raylib. Move through a dungeon and type the
+words over enemies to defeat them. Each floor introduces new waves, traps, and
+boss encounters.
 
-## Gameplay
+Between floors, a shop lets you spend gold on upgrades. Bombs, freeze pickups,
+and health pickups change how a run plays out. High scores and permanent upgrades
+are saved between runs.
 
-- Procedural floors, enemy waves, and boss encounters.
-- Traps, health pickups, bombs, freeze powerups, and a between-floor shop.
-- Persistent upgrades and high scores saved through C file I/O.
-- Combo scoring, fog of war, particles, HUD feedback, and screen shake.
+## Run locally
 
-## Build and run
-
-Requirements: CMake 3.20+, a C11 compiler, and internet access on the first build to download raylib 5.5. Platform-specific raylib build dependencies may also be required.
+Use a C11 compiler and CMake 3.20 or newer. The first build downloads raylib 5.5,
+so it needs a network connection and raylib's platform build dependencies.
 
 ```sh
 cmake -S . -B build
 cmake --build build --config Release
 ```
 
-Run `build/typing_roguelike_polished` on a single-configuration build. On Windows, the executable is typically `build/Release/typing_roguelike_polished.exe` with Visual Studio, or `build/typing_roguelike_polished.exe` with MinGW. The executable retains the original internal project name.
+For a single-configuration build, run `build/typing_roguelike_polished`. With
+Visual Studio on Windows, run `build/Release/typing_roguelike_polished.exe`;
+with MinGW, run `build/typing_roguelike_polished.exe`. The executable keeps the
+original CMake target name.
 
-## Controls and persistence
+## Controls and saves
 
-- Enter or Space starts a run from the title screen.
-- Arrow keys or WASD move; type the words displayed over enemies.
-- Number keys select shop upgrades; Enter or Escape leaves the shop.
-- Follow the on-screen prompts for difficulty and run actions.
+- Enter or Space starts a run.
+- Arrow keys or WASD move; typing attacks the words displayed over enemies.
+- Number keys select shop upgrades. Enter or Escape leaves the shop.
+- Difficulty and other run controls are shown on screen.
 
-`save.dat` is created in the working directory. An optional `wordlist.txt` can supply words; the source contains fallback word lists. Personal saves are excluded from this repository.
+The game writes `save.dat` in its working directory. An optional `wordlist.txt`
+adds words; built-in lists are used when it is absent. Personal saves are ignored
+by Git.
 
 ## Implementation
 
-`main.c` contains the game loop, entity state, dungeon generation, combat, UI, and save/load routines. `CMakeLists.txt` fetches and links raylib. Game visuals are drawn procedurally, so no separate art bundle is required.
+`main.c` contains the game loop, dungeon generation, entity state, combat, drawing,
+and save/load code. `CMakeLists.txt` downloads and links raylib. The visuals are
+drawn in code, so the game does not need a separate art bundle.
+
+There is no automated test suite yet. Build checks cover compilation; gameplay,
+controls, and saving need a manual run.

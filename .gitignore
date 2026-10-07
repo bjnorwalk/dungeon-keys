@@ -1,16 +1,14 @@
-node_modules/
-dist/
+# Build output and local CMake settings
 build/
 cmake-build*/
+CMakeUserPresets.json
+
+# Local saves and configuration
+save.dat
 .env
 .env.*
 !.env.example
-*.db
-*.sqlite
-*.sqlite3
-*.db-wal
-*.db-shm
+
+# Logs and operating system files
 *.log
-save.dat
-server/data/
-data/
+.DS_Store
