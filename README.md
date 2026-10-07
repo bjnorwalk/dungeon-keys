@@ -14,7 +14,7 @@ Use a C11 compiler and CMake 3.20 or newer. The first build downloads raylib 5.5
 so it needs a network connection and raylib's platform build dependencies.
 
 ```sh
-cmake -S . -B build
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
@@ -22,6 +22,15 @@ For a single-configuration build, run `build/typing_roguelike_polished`. With
 Visual Studio on Windows, run `build/Release/typing_roguelike_polished.exe`;
 with MinGW, run `build/typing_roguelike_polished.exe`. The executable keeps the
 original CMake target name.
+
+On macOS, install Xcode Command Line Tools (`xcode-select --install`) and CMake.
+On Ubuntu, install the compiler, CMake, and raylib's development libraries:
+
+```sh
+sudo apt-get install build-essential cmake libasound2-dev libx11-dev libxrandr-dev libxi-dev libgl1-mesa-dev libglu1-mesa-dev libxcursor-dev libxinerama-dev
+```
+
+GitHub Actions runs a Linux build on pushes and pull requests.
 
 ## Controls and saves
 
