@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.20)
 project(typing_roguelike_polished C)
 
 set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
@@ -20,4 +21,3 @@ FetchContent_MakeAvailable(raylib)
 add_executable(typing_roguelike_polished main.c)
 
 target_link_libraries(typing_roguelike_polished PRIVATE raylib)
-
